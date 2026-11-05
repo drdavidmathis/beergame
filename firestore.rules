@@ -1,0 +1,92 @@
+rules_version = '2';
+
+// Security rules for the Beer Game. Paste this whole file into
+// Firebase console > Firestore Database > Rules, then press Publish.
+//
+// What they guarantee:
+//  - Only the instructor's browser can run the game, change settings,
+//    correct orders, or see the full supply-chain state.
+//  - A student can only read their own team's numbers and chat.
+//  - Only a team's captain can submit its order, once per week, and the
+//    database itself rejects anything that isn't a whole number between
+//    0 and the team's limit (so no 72,000,000,000 even via dev tools).
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function sess(code) { return get(/databases/$(database)/documents/sessions/$(code)).data; }
+    function isOwner(code) { return signedIn() && sess(code).ownerUid == request.auth.uid; }
+    function teamDoc(code, t) { return get(/databases/$(database)/documents/sessions/$(code)/teams/$(t)).data; }
+    function viewDoc(code, t) { return get(/databases/$(database)/documents/sessions/$(code)/views/$(t)).data; }
+    function isMember(code, t) { return signedIn() && request.auth.uid in teamDoc(code, t).members; }
+
+    match /sessions/{code} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if isOwner(code);
+
+      match /players/{pid} {
+        allow read: if signedIn();
+        allow create: if signedIn() && pid == request.auth.uid
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 30
+          && request.resource.data.teamId == null;
+        allow update, delete: if isOwner(code);
+      }
+
+      match /teams/{t} {
+        allow read: if signedIn();
+        allow create, delete: if isOwner(code);
+        allow update: if isOwner(code) || (
+          signedIn() && request.auth.uid in resource.data.members
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['captain', 'captainName'])
+          && request.resource.data.captain == request.auth.uid);
+      }
+
+      match /views/{t} {
+        allow read: if isOwner(code) || isMember(code, t);
+        allow write: if isOwner(code);
+      }
+
+      // Order ids look like  TEAMID_WEEK  (e.g. W3_12)
+      match /orders/{oid} {
+        allow read: if isOwner(code) || isMember(code, oid.split('_')[0]);
+        allow create: if isOwner(code) || (
+          signedIn()
+          && oid == request.resource.data.teamId + '_' + string(request.resource.data.week)
+          && teamDoc(code, request.resource.data.teamId).captain == request.auth.uid
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.source == 'captain'
+          && request.resource.data.qty is int
+          && request.resource.data.qty >= 0
+          && request.resource.data.qty <= viewDoc(code, request.resource.data.teamId).limits.max
+          && request.resource.data.week == viewDoc(code, request.resource.data.teamId).week
+          && viewDoc(code, request.resource.data.teamId).status == 'playing'
+          && sess(code).paused == false);
+        allow update, delete: if isOwner(code);
+      }
+
+      match /chats/{t}/msgs/{m} {
+        allow read: if isOwner(code) || isMember(code, t);
+        allow create: if isOwner(code) || (
+          isMember(code, t)
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() <= 300
+          && request.resource.data.kind in ['msg', 'system']);
+        allow update, delete: if isOwner(code);
+      }
+
+      match /results/{n} {
+        allow read: if signedIn();
+        allow write: if isOwner(code);
+      }
+
+      // Full game state, weekly snapshots, instructor log
+      match /private/{d} { allow read, write: if isOwner(code); }
+      match /snapshots/{d} { allow read, write: if isOwner(code); }
+      match /audit/{d} { allow read, write: if isOwner(code); }
+    }
+  }
+}
