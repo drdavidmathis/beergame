@@ -6,6 +6,8 @@ import { TIERS } from "./config.js";
 
 const live = new Map();
 
+export const get = key => live.get(key);
+
 export function destroyAll(prefix = "") {
   for (const [k, c] of live) if (k.startsWith(prefix)) { c.destroy(); live.delete(k); }
 }
@@ -75,16 +77,29 @@ export function stackedBars(key, canvas, { labels, series, yTitle = "Dollars" })
 
 export const weeksLabels = n => Array.from({ length: n }, (_, i) => i + 1);
 
-// The classic bullwhip picture: end-customer demand vs total orders per tier.
+// The classic bullwhip picture: end-customer demand vs total orders per
+// tier. Brewery production is a different kind of decision, so it gets
+// its own chart (breweryChart) rather than a line here.
 export function bullwhipChart(key, canvas, res, bw, { perTeam = false } = {}) {
   const labels = weeksLabels(res.weeks);
   const scale = perTeam ? 1 / res.retailers : 1;
   const series = [{ label: "Customer demand", data: bw.demandTotal.map(v => v * scale), color: cssVar("--ink"), dash: [6, 4] }];
-  for (const tier of TIERS) {
-    series.push({
-      label: tier === "brewery" ? "Brewery production" : `${tierLabel(tier)} orders`,
-      data: bw.tierOrders[tier].map(v => v * scale), color: tierColor(tier),
-    });
+  for (const tier of ["retailer", "wholesaler", "distributor"]) {
+    series.push({ label: `${tierLabel(tier)} orders`, data: bw.tierOrders[tier].map(v => v * scale), color: tierColor(tier) });
   }
   return lines(key, canvas, { labels, series, yTitle: perTeam || res.retailers === 1 ? "Cases per week" : "Cases per week (all teams)" });
+}
+
+export function breweryChart(key, canvas, res) {
+  const B = Object.values(res.teams).find(t => t.tier === "brewery");
+  return lines(key, canvas, {
+    labels: weeksLabels(res.weeks),
+    series: [
+      { label: "Orders from distributors", data: B.incoming, color: tierColor("distributor"), width: 1.5 },
+      { label: "Brewery production", data: B.orders, color: tierColor("brewery") },
+      { label: "Normal capacity", data: res.capacity.map(c => c.normal), color: cssVar("--ink-3"), dash: [4, 4], width: 1.5, stepped: true },
+      { label: "Maximum with surge", data: res.capacity.map(c => c.surge), color: cssVar("--ink-3"), dash: [1, 3], width: 1.5, stepped: true },
+      { label: "Brewery backorders", data: B.backlog, color: cssVar("--ink"), width: 1.5, dash: [8, 3] },
+    ],
+  });
 }

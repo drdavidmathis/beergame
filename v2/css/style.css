@@ -223,3 +223,28 @@ th { font-size: .8rem; color: var(--ink-2); font-weight: 700; position: sticky; 
 .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: .85rem; color: var(--ink-2); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+
+/* V2 student layout */
+.play .chat { position: sticky; top: 76px; }
+details > summary { cursor: pointer; list-style: none; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: "▸ "; color: var(--ink-3); }
+details[open] > summary::before { content: "▾ "; }
+.submitted { background: var(--good-soft); color: var(--good); border-radius: 10px; padding: 14px 16px; }
+.submitted .big { font-size: 1.5rem; font-weight: 700; }
+.submitted .small { color: var(--ink-2); }
+.mobtabs { display: none; }
+@media (max-width: 900px) {
+  .play .chat { position: static; height: calc(100vh - 190px); }
+  .play-wrap { padding-bottom: 80px; }
+  .play-wrap[data-tab="team"] #chat { display: none; }
+  .play-wrap[data-tab="chat"] .main-col { display: none; }
+  .mobtabs { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; background: var(--surface); border-top: 1px solid var(--line); }
+  .mobtabs button { flex: 1; border: 0; border-radius: 0; padding: 14px; justify-content: center; background: transparent; color: var(--ink-2); }
+  .mobtabs button.on { color: var(--ink); box-shadow: inset 0 3px 0 var(--accent); }
+}
+.roster td, .roster th { text-align: left; }
+.roster select { width: auto; padding: 4px 6px; font-size: .9rem; }
+.btnrow { display: flex; gap: 6px; flex-wrap: wrap; }
+.captable td { white-space: normal; }
+.play-wrap, .main-col { min-width: 0; }

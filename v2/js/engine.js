@@ -37,6 +37,9 @@ export function normalizeConfig(raw) {
   c.sharing = ["off", "on", "split"].includes(c.sharing) ? c.sharing : "off";
   if (c.mode === "network" && c.sharing === "split") c.sharing = "off";
   c.warnMultiple = c.warnMultiple || 3;
+  c.botStyle = ["steady", "mixed", "conservative", "reactive", "forecast"].includes(c.botStyle) ? c.botStyle : "steady";
+  c.botSeed = Math.round(Number(c.botSeed) || 1);
+  c.autoPlaceLate = c.autoPlaceLate !== false && c.autoPlaceLate !== "false";
   return c;
 }
 
@@ -127,15 +130,17 @@ export function teamOrder(net) {
 // ---------------------------------------------------------------------
 // Network state
 // ---------------------------------------------------------------------
-export function newNetwork(skel, config, { sharing = false, now = Date.now() } = {}) {
+export function newNetwork(skel, config, { sharing = false, now = Date.now(), index = 0 } = {}) {
   const c = structuredClone(config);
   const net = {
     id: skel.id, name: skel.name, mode: c.mode, sharing: !!sharing,
     config: c, configChanges: [],
-    week: 0, status: "playing", demand: [],
+    week: 0, status: "playing", endedBy: null, demand: [],
     weekStartedAt: now, startedAt: now, endedAt: null,
-    teams: {}, ledger: {},
+    teams: {}, ledger: {}, cases: { start: 0, produced: 0, delivered: 0 },
   };
+  const rng = mulberry32(hashSeed(c.botSeed ?? 1, skel.id, index));
+  const styles = Object.keys(BOT_STYLES);
   // baselines bottom-up
   const d1 = demandFor(c, 1);
   const base = {};
@@ -163,6 +168,8 @@ export function newNetwork(skel, config, { sharing = false, now = Date.now() } =
       expDemand: b,
       lastOrder: b,
       cost: { holding: 0, backorder: 0, surge: 0, total: 0 },
+      botStyle: c.botStyle === "mixed" ? styles[Math.floor(rng() * styles.length)]
+        : (BOT_STYLES[c.botStyle] ? c.botStyle : "steady"),
       history: [],
     };
     // ledger: one entry per link, keyed by the customer team
@@ -172,7 +179,7 @@ export function newNetwork(skel, config, { sharing = false, now = Date.now() } =
       net.ledger[s.id] = { brewed: 0, seed: lead * b, received: 0 };
     }
   }
-  net.ledger[CUST] = {};
+  for (const t of Object.values(net.teams)) net.cases.start += t.inv + t.shipPipe.reduce((a, b) => a + b, 0);
   startWeek(net, 1, now);
   return net;
 }
@@ -229,8 +236,13 @@ function startWeek(net, w, now) {
     const owed = {};
     for (const k in incoming) owed[k] = t.backlog[k] + incoming[k];
     const shipped = allocate(t.inv, owed, w);
-    for (const k in owed) t.backlog[k] = owed[k] - shipped[k];
+    if (sum(shipped) > t.inv) throw new Error(`Integrity: ${t.label} shipped more than it had (week ${w})`);
+    for (const k in owed) {
+      if (shipped[k] > owed[k] || shipped[k] < 0) throw new Error(`Integrity: allocation error at ${t.label} (week ${w})`);
+      t.backlog[k] = owed[k] - shipped[k];
+    }
     t.inv -= sum(shipped);
+    if (t.tier === "retailer") net.cases.delivered += shipped[CUST];
     for (const cid of t.customers) {
       net.teams[cid].shipPipe.push(shipped[cid]);
       net.ledger[cid].shipped += shipped[cid];
@@ -248,24 +260,30 @@ function startWeek(net, w, now) {
       week: w, received: received[t.id], incoming: inc, shipped: sum(shipped),
       inv: t.inv, backlog,
       ...(many ? { incomingBy: incoming, shippedBy: shipped, backlogBy: { ...t.backlog } } : {}),
-      order: null, normal: null, surge: null,
+      order: null, source: null, normal: null, surge: null,
       holdingCost: holding, backorderCost: backorder, surgeCost: 0,
       weekCost: holding + backorder, cumCost: t.cost.total,
     });
   }
-  checkLedger(net);
+  checkIntegrity(net, "start");
 }
 
 // Apply this week's decisions and move on. orders = {teamId: qty}
-export function advance(net, orders, now = Date.now()) {
+// sources = {teamId: "team" | "instructor" | "previous" | "computer"}
+export function advance(net, orders, now = Date.now(), sources = {}) {
   const n = structuredClone(net);
   if (n.status !== "playing") return n;
   const c = n.config;
   for (const t of Object.values(n.teams)) {
     const q = orders[t.id];
     if (!Number.isInteger(q) || q < 0) throw new Error(`Missing order for ${t.label}`);
+    const lim = limitsFor(n, t.id).max;
+    if (q > lim) throw new Error(t.tier === "brewery"
+      ? `Integrity: production of ${q} exceeds the brewery's maximum of ${lim}`
+      : `Integrity: order of ${q} from ${t.label} exceeds its limit of ${lim}`);
     const e = t.history[t.history.length - 1];
     e.order = q;
+    e.source = sources[t.id] || "team";
     if (t.tier === "brewery") {
       const normal = Math.min(q, c.normalCapacity);
       const surge = q - normal;
@@ -276,6 +294,7 @@ export function advance(net, orders, now = Date.now()) {
       e.cumCost = t.cost.total;
       t.shipPipe.push(q);
       n.ledger[t.id].brewed += q;
+      n.cases.produced += q;
     } else {
       n.teams[t.supplier].orderPipes[t.id].push(q);
       n.ledger[t.id].ordered += q;
@@ -285,18 +304,86 @@ export function advance(net, orders, now = Date.now()) {
   }
   if (n.week >= c.weeks) {
     n.status = "done";
+    n.endedBy = "schedule";
     n.endedAt = now;
+    checkIntegrity(n, "end");
   } else {
     startWeek(n, n.week + 1, now);
   }
   return n;
 }
 
+// Add weeks to a game. A game that already reached its scheduled end
+// (or was ended early) picks up where it stopped.
+export function extendNetwork(net, add, now = Date.now()) {
+  const n = structuredClone(net);
+  n.config.weeks += add;
+  if (n.status === "done") {
+    n.status = "playing";
+    n.endedAt = null;
+    if (n.endedBy === "schedule") startWeek(n, n.week + 1, now);
+    else n.weekStartedAt = now;
+    n.endedBy = null;
+  }
+  return n;
+}
+
+// Re-run the game from a saved start-of-week state, using the decisions
+// recorded in priorNet, with some of them corrected. Computer decisions
+// are recalculated, because the computer reacts to the corrected state.
+// corrections = {teamId: {week: qty}}
+export function replay(snapshot, priorNet, corrections, now = Date.now(), onWeekStart = null) {
+  let n = structuredClone(snapshot);
+  n.configChanges = structuredClone(priorNet.configChanges || []);
+  const doneWeeks = completedWeeks(priorNet);
+  while (n.status === "playing" && n.week <= doneWeeks) {
+    const w = n.week;
+    const orders = {}, sources = {};
+    for (const id of Object.keys(n.teams)) {
+      const e = priorNet.teams[id].history[w - 1];
+      const fix = corrections[id]?.[w];
+      if (fix != null) { orders[id] = fix; sources[id] = "instructor"; }
+      else if (e.source === "computer") { orders[id] = botOrder(n, id); sources[id] = "computer"; }
+      else { orders[id] = e.order; sources[id] = e.source; }
+    }
+ n = advance(n, orders, now, sources);
+    if (n.status === "playing") onWeekStart?.(n);
+  }
+  if (priorNet.status === "done" && priorNet.endedBy === "instructor" && n.status === "playing") {
+    n = endNetwork(n, now);
+  }
+  n.weekStartedAt = priorNet.weekStartedAt;
+  return n;
+}
+
 // End early (instructor). The current, undecided week is dropped from stats.
 export function endNetwork(net, now = Date.now()) {
   const n = structuredClone(net);
-  if (n.status === "playing") { n.status = "done"; n.endedAt = now; }
+  if (n.status === "playing") { n.status = "done"; n.endedBy = "instructor"; n.endedAt = now; }
   return n;
+}
+
+// Run after every state change. Throws on any inconsistency.
+export function checkIntegrity(net, phase = "start") {
+  checkLedger(net);
+  const c = net.config;
+  let cases = net.cases.delivered;
+  for (const t of Object.values(net.teams)) {
+    if (t.inv < 0) throw new Error(`Integrity: negative inventory at ${t.label} (week ${net.week})`);
+    if (Object.values(t.backlog).some(b => b < 0)) throw new Error(`Integrity: negative backorders at ${t.label}`);
+    cases += t.inv + t.shipPipe.reduce((a, b) => a + b, 0);
+    // pipeline lengths prove every shipment and order takes exactly its lead time
+    if (phase === "start") {
+      const want = t.tier === "brewery" ? c.productionDelay - 1 : c.shipDelay;
+      if (t.shipPipe.length !== want) throw new Error(`Integrity: wrong transit length at ${t.label}`);
+      for (const cid of t.customers) {
+        if (t.orderPipes[cid].length !== c.orderDelay - 1) throw new Error(`Integrity: wrong order-delay length at ${t.label}`);
+      }
+    }
+  }
+  if (cases !== net.cases.start + net.cases.produced) {
+    throw new Error(`Integrity: cases created or lost (have ${cases}, expected ${net.cases.start + net.cases.produced}, week ${net.week})`);
+  }
 }
 
 // Orders, shipments and backorders must always balance on every link.
@@ -354,18 +441,57 @@ export function validateOrder(limits, raw, isBrewery = false) {
   return { ok: true, value: v, confirm: v > limits.warnAt };
 }
 
-// Computer player for empty teams: orders to cover expected demand and
-// close gaps in inventory and in what is already on the way.
+// Computer players. Each style is a plain decision rule: forecast
+// demand, then close part of the gap in inventory and in what is
+// already on the way. Styles differ in how they forecast and react;
+// none of them is built to create a bullwhip on purpose.
+export const BOT_STYLES = {
+  steady: { label: "Steady (baseline)", theta: 0.3, adjust: 0.25, lineWeight: 1, invWeeks: null },
+  conservative: { label: "Conservative", theta: 0.2, adjust: 0.15, lineWeight: 1, invWeeks: 2 },
+  reactive: { label: "Reacts strongly", theta: 0.6, adjust: 0.5, lineWeight: 0.4, invWeeks: null },
+  forecast: { label: "Forecast-based", theta: null, adjust: 0.3, lineWeight: 1, invWeeks: null },
+};
+
+function forecastFor(t, style) {
+  const inc = t.history.map(e => e.incoming);
+  if (style.theta == null) {
+    // 4-week moving average plus half the recent trend
+    const avg = xs => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : t.baseline;
+    const now = avg(inc.slice(-4)), before = avg(inc.slice(-8, -4).length ? inc.slice(-8, -4) : inc.slice(0, 1));
+    return Math.max(0, now + 0.5 * (now - before));
+  }
+  let E = t.baseline;
+  for (const x of inc) E += style.theta * (x - E);
+  return E;
+}
+
 export function botOrder(net, teamId) {
   const c = net.config;
   const t = net.teams[teamId];
+  const style = BOT_STYLES[t.botStyle] || BOT_STYLES.steady;
   const lead = t.tier === "brewery" ? c.productionDelay : c.orderDelay + c.shipDelay;
-  const E = t.expDemand;
-  const target = c.startingInventoryWeeks * t.baseline;
+  const E = forecastFor(t, style);
+  const target = (style.invWeeks ?? c.startingInventoryWeeks) * t.baseline;
   const gapInv = target - (t.inv - sum(t.backlog));
   const gapLine = E * (lead - 1) - t.onOrder;
-  const q = Math.round(E + 0.25 * (gapInv + gapLine));
+  const q = Math.round(E + style.adjust * (gapInv + style.lineWeight * gapLine));
   return Math.max(0, Math.min(limitsFor(net, teamId).max, q));
+}
+
+// Small seeded random number generator, so "mixed" computer players are
+// assigned the same way every time for a given seed.
+export function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function hashSeed(...parts) {
+  let h = 2166136261;
+  for (const ch of parts.join("|")) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return h >>> 0;
 }
 
 // ---------------------------------------------------------------------
@@ -389,6 +515,12 @@ export function teamView(net, teamId) {
       holdingCost: last.holdingCost, backorderCost: last.backorderCost, weekCost: last.weekCost,
     } : null,
     totalCost: t.cost.total,
+    costs: { holding: t.cost.holding, backorder: t.cost.backorder, surge: t.cost.surge },
+    owedBy: t.customers.length > 1 ? t.customers.map(cid => ({ label: labelOf(cid), owed: t.backlog[cid] })) : null,
+    lastDecision: (() => {
+      const e = [...t.history].reverse().find(x => x.order != null);
+      return e ? { week: e.week, qty: e.order } : null;
+    })(),
     rates: { holding: net.config.holdingCost, backorder: net.config.backorderCost },
     inTransit: [...t.shipPipe],
     brewWeeks: net.config.productionDelay,
@@ -396,7 +528,7 @@ export function teamView(net, teamId) {
     history: t.history.map(e => ({
       week: e.week, received: e.received, incoming: e.incoming, shipped: e.shipped,
       inv: e.inv, backlog: e.backlog, order: e.order, weekCost: e.weekCost,
-      ...(t.tier === "brewery" ? { surge: e.surge } : {}),
+      ...(t.tier === "brewery" ? { surge: e.surge, surgeCost: e.surgeCost } : {}),
     })),
     sharing: null,
   };
@@ -427,7 +559,8 @@ export function results(net) {
     const t = net.teams[id];
     const h = t.history.slice(0, W);
     teams[id] = {
-      id, tier: t.tier, label: t.label, baseline: t.baseline, supplier: t.supplier,
+      id, tier: t.tier, label: t.label, baseline: t.baseline, supplier: t.supplier, customers: t.customers,
+      botStyle: t.botStyle, sources: h.map(e => e.source),
       orders: h.map(e => e.order), incoming: h.map(e => e.incoming), received: h.map(e => e.received),
       shipped: h.map(e => e.shipped), inv: h.map(e => e.inv), backlog: h.map(e => e.backlog),
       holding: h.map(e => e.holdingCost), backorder: h.map(e => e.backorderCost), surgeCost: h.map(e => e.surgeCost),
@@ -471,14 +604,17 @@ function variance(xs) {
 }
 
 // Bullwhip ratio = variance of orders / variance of the customer demand
-// the team (or tier) ultimately serves, scaled to its size.
+// the team (or tier) ultimately serves, scaled to its size. When customer
+// demand barely varied, ratios are meaningless, so they are left out.
+export const MIN_DEMAND_VARIANCE = 0.05;
 export function bullwhip(res) {
   const demandRetail = res.demand;
   const vd = variance(demandRetail);
+  const ok = vd >= MIN_DEMAND_VARIANCE && res.weeks >= 4;
   const teamRatio = {};
   for (const t of Object.values(res.teams)) {
     const scale = t.baseline / (demandRetail[0] || 1);
-    teamRatio[t.id] = vd > 0 ? variance(t.orders) / (vd * scale * scale) : null;
+    teamRatio[t.id] = ok ? variance(t.orders) / (vd * scale * scale) : null;
   }
   const tierRatio = {}, tierOrders = {};
   const vTotal = vd * res.retailers * res.retailers;
@@ -486,9 +622,17 @@ export function bullwhip(res) {
     const ts = Object.values(res.teams).filter(t => t.tier === tier);
     const tot = res.demand.map((_, i) => ts.reduce((s, t) => s + t.orders[i], 0));
     tierOrders[tier] = tot;
-    tierRatio[tier] = vTotal > 0 ? variance(tot) / vTotal : null;
+    tierRatio[tier] = ok ? variance(tot) / vTotal : null;
   }
-  return { teamRatio, tierRatio, tierOrders, demandTotal: res.demand.map(d => d * res.retailers) };
+  const B = Object.values(res.teams).find(t => t.tier === "brewery");
+  return {
+    ok, demandVariance: vd,
+    teamRatio, tierRatio, tierOrders,
+    // brewery: what it was asked for vs. what it chose to brew
+    breweryOrdersRatio: ok ? variance(B.incoming) / vTotal : null,
+    breweryProductionRatio: tierRatio.brewery,
+    demandTotal: res.demand.map(d => d * res.retailers),
+  };
 }
 
 // Flat rows for CSV export.
@@ -502,6 +646,7 @@ export function csvRows(res, extra = {}) {
         week: i + 1, customer_demand_per_retailer: res.demand[i],
         received: t.received[i], incoming_orders: t.incoming[i], shipped: t.shipped[i],
         inventory: t.inv[i], backorders: t.backlog[i], order_or_production: t.orders[i],
+        decision_source: t.sources ? t.sources[i] : "",
         surge_units: t.surge ? t.surge[i] : "", normal_capacity: t.tier === "brewery" ? res.capacity[i].normal : "",
         holding_cost: t.holding[i], backorder_cost: t.backorder[i], surge_cost: t.surgeCost[i],
         week_cost: t.holding[i] + t.backorder[i] + t.surgeCost[i],

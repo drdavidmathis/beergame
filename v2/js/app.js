@@ -2,6 +2,7 @@
 //         #/play/CODE   student
 //         #/host        instructor: create a session
 //         #/host/CODE   instructor dashboard
+//         #/lab         simulation lab (computer players, no database)
 import { initStore, backendName } from "./store.js";
 import { topbar, esc } from "./ui.js";
 
@@ -12,6 +13,11 @@ async function route() {
   const [page, arg] = location.hash.replace(/^#\/?/, "").split("/");
   try { cleanup?.(); } catch { }
   cleanup = null;
+  if (page === "lab") {
+    const m = await import("./lab.js");
+    cleanup = m.mount(root);
+    return;
+  }
   const role = page === "host" ? "host" : "player";
   let store;
   try {

@@ -70,38 +70,58 @@ Your repository is public, so anyone can see these values. That's expected: the 
 
 ## 4. Do a dry run before class
 
-Do this with a TA, or with a laptop plus a phone and a couple of browser windows.
+Use a TA, or a laptop plus a phone and a couple of browser windows.
 
-1. Instructor: create a session.
-2. Students: join from 2–3 other devices or browsers. Each browser tab counts as a separate student.
-3. Start, play a few weeks, try **Undo last week**, change a setting, end the game, and check the Debrief tab.
+1. As the instructor, create a session.
+2. Join as 2–3 students from other devices or browsers.
+   - In classroom mode, each browser remembers one student.
+   - To play several students from one browser, open a new tab, go to the join page, and click **"Testing with several tabs?"** That tab becomes a separate student.
+3. Try the following:
+   - Auto-assign, then move a student.
+   - Start the game and play a few weeks.
+   - Remind a team, use **Repeat last** and **Computer decides**, and correct a past order.
+   - Use **+5 weeks**, then end the game and check the Debrief tab.
 
 If anything doesn't work, the browser console usually says why: right-click the page, choose **Inspect**, then **Console**. Send me the message.
 
+You can also open the **Simulation lab** (link at the bottom of the Instructor page). It plays a whole game with computer players in seconds, checks the simulation's bookkeeping every week, and lets you step through every team's state week by week. It doesn't use the database.
+
 ## 5. Running it in class
 
-- Open the site, click **Instructor**, choose your settings, and create the session.
-- Project the lobby screen. It shows the web address and the 4-letter code. Students join with **first name and last initial**.
-- When everyone is in, click **Form teams and start**. Teams and roles are assigned automatically and balanced. Anyone who joins late is added to a team automatically.
-- **Keep the instructor tab open and the laptop awake for the whole game.** Your dashboard is what runs each week.
-  - If it closes, nothing is lost. The game simply waits until you reopen the session.
-  - Your recent sessions are listed on the Instructor page.
-  - Use the same browser you created the session in.
-- If a student closes their tab, they rejoin with **exactly the same name** and get their seat back.
+1. Open the site, click **Instructor**, choose your settings, and create the session.
+2. Project the lobby screen, which shows the web address and the 4-letter code. Students join with their **first name and last initial**.
+3. Click **Auto-assign teams**. Teams and roles are random and balanced. Then adjust:
+   - Change any student's team from the dropdown.
+   - Make someone captain.
+   - Remove a duplicate entry.
+   - Press **Reshuffle teams** to start over.
 
-### Dashboard controls
+   You can also skip this step and press **Start game**, which assigns at random.
+4. Click **Start game**.
+5. **Keep the instructor tab open and the laptop awake for the whole game.** Your dashboard is what runs each week.
+   - If it closes, nothing is lost. The game waits until you reopen the session from the same browser.
+   - Your recent sessions are listed on the Instructor page.
 
-| Control | What it does |
-|---|---|
-| Click a team | Members, captain, this week's order, recent weeks, and the team's chat |
-| Enter / Correct order | Sets or changes a team's order for the current week (logged, and the team sees a note) |
-| Computer plays this team | Hands an absent team to the computer, or gives it back |
-| Advance now | Moves the week forward; teams that haven't submitted repeat last week's order (logged) |
-| Undo last week | Rolls back one week and pauses, so you can correct an order, then **Resume** |
-| Restart | Back to week 1 |
-| Settings | Brewery capacity, surge cost, holding/backorder costs, order limits; takes effect next week |
-| End game | Stops the game and shows everyone the debrief |
-| Export | CSVs of all game data, team chats, and your log |
+**Rejoining.** A student who refreshes or loses their connection comes back to the same team by reopening the page in the same browser. If someone switches devices, they join again and you move the new entry to their team from the **Teams** tab, then remove the old entry.
+
+**Late arrivals.** Students who join after the start are seated automatically on the smallest team, preferring teams the computer is playing. You can turn this off when creating the session and seat them yourself.
+
+### Dashboard
+
+| Where | Control | What it does |
+|---|---|---|
+| Top bar | **+5 weeks** | Lengthens the game. Students are never shown the length. Also resumes a game that has reached its end. |
+| Top bar | Pause / Resume, Settings, End game | Settings (brewery capacity, surge cost, holding and backorder costs, order limits) take effect next week. End game opens the debrief. |
+| Live | **Waiting on N teams** panel | Shows how long each team has waited, with **Remind**, **Repeat last (n)**, **Computer decides** and **Enter…** for each. The week advances by itself once every team has a decision. |
+| Live | Advance now | Moves the week forward. Any team that hasn't submitted repeats last week's order. |
+| Live | Undo last week, Restart | Steps a game back one week (and pauses), or back to week 1. |
+| Live | Click a team | Shows the team's students, captain, computer toggle, recent weeks and chat. **Enter or correct an order** works for this week or any past week. |
+| Teams | Roster | Move students between teams, set captains, hand a team to the computer or back, and remove entries. |
+| Debrief | Charts | Bullwhip chart, brewery production vs. capacity, cumulative costs, a team comparison that can highlight one team or branch, inventory and backorders, costs by team, and bullwhip ratios. |
+| Log | Instructor log | Every correction, reminder, decision made on a team's behalf, undo, settings change and roster change. |
+| Export | CSV files | Game data (including who made each weekly decision), team chats, and the log. |
+
+**Correcting a past order.** Pick the week and the right number. The game re-runs from that week with the corrected order and recalculates every later week, using the orders teams actually submitted. Inventories, shipments and backorders stay consistent everywhere. Computer-played teams re-decide based on the corrected situation. The team gets a note in its chat, and the change is logged.
 
 ## Changing the defaults
 
@@ -118,6 +138,15 @@ All default settings are in `js/config.js`, with comments. Every setting is also
 - The database enforces the same limits, so they can't be bypassed through the browser's developer tools.
 - Each team's order locks once submitted. Only you can change it.
 
+## Computer players
+
+Computer players fill teams without students. Their style is set on the New session form:
+
+- **Steady** (the default) uses one predictable rule for every team.
+- **Mixed** gives each team one of four styles: steady, conservative, reacts strongly, or forecast-based.
+
+The **random seed** makes a mix repeatable: the same seed always gives the same assignment. The "reacts strongly" style pays less attention to beer already on the way, the way many people do. A game full of mixed computer players can therefore show a bullwhip on its own.
+
 ## Free-tier usage
 
 A 60-student, 36-week session uses roughly 10,000–20,000 database reads and a few thousand writes. Chat is the biggest share. The free plan allows 50,000 reads and 20,000 writes per day, so two sections in a day is fine. You never need to add a credit card.
@@ -127,4 +156,5 @@ A 60-student, 36-week session uses roughly 10,000–20,000 database reads and a 
 - `index.html`, `css/`, `js/`: the game
 - `js/config.js`: settings and the Firebase connection
 - `firestore.rules`: database security rules (paste into Firebase)
-- `tools/simulate.mjs`: optional calibration script. With Node.js installed, run `node tools/simulate.mjs network typical` to see how simulated players stress the brewery under the current settings.
+- `tools/test.mjs`: the integrity test suite. With Node.js installed, run `node tools/test.mjs`. It plays full 36-week games, then checks every rule: no negative inventory, exact delays, fair allocation, no lost or duplicated cases, consistent corrections, and records that reconcile row by row.
+- `tools/simulate.mjs`: optional calibration script. Run `node tools/simulate.mjs network typical` to see how simulated players stress the brewery under the current settings.

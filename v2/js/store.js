@@ -8,6 +8,7 @@
 //   watchDoc(path, cb) / watchCol(path, cb)  -> unsubscribe
 //   createOnce(path, data)    -> true if created, false if it already existed
 //   transact(path, fn)        fn(current) returns next data (undefined = skip)
+//   perTabIdentity(on)        (classroom mode) give this tab its own student identity
 
 import { BACKEND, FIREBASE_CONFIG } from "./config.js";
 
@@ -17,6 +18,10 @@ let impl = null;
 // role "host" keeps one identity per browser (the instructor);
 // role "player" gets a separate identity per tab, so a refresh keeps
 // your seat and a second tab can be a second student when testing.
+export function perTabIdentity(on) {
+  if (on) sessionStorage.setItem("bg-tab-identity", "1"); else sessionStorage.removeItem("bg-tab-identity");
+}
+
 export async function initStore(role) {
   if (impl) return impl;
   impl = BACKEND === "firebase" ? await firebaseStore(role) : localStore(role);
@@ -67,6 +72,7 @@ function localStore(role) {
     id = localStorage.getItem("bg-host-id") || rid("h");
     localStorage.setItem("bg-host-id", id);
   } else {
+    // Test mode: each tab is its own student (a refresh keeps the seat).
     id = sessionStorage.getItem("bg-player-id") || rid("p");
     sessionStorage.setItem("bg-player-id", id);
   }
@@ -133,8 +139,12 @@ async function firebaseStore(role) {
 
   const fbApp = app.initializeApp(FIREBASE_CONFIG);
   const db = fs.initializeFirestore(fbApp, { ignoreUndefinedProperties: true });
+  // Students keep one identity per browser, so a refresh, a closed tab or
+  // a dropped connection brings them back to the same seat. For testing,
+  // a tab can opt into its own separate identity (see the join screen).
+  const perTab = role !== "host" && sessionStorage.getItem("bg-tab-identity") === "1";
   const auth = au.initializeAuth(fbApp, {
-    persistence: role === "host" ? au.browserLocalPersistence : au.browserSessionPersistence,
+    persistence: perTab ? au.browserSessionPersistence : au.browserLocalPersistence,
   });
   await auth.authStateReady();
   const user = auth.currentUser || (await au.signInAnonymously(auth)).user;

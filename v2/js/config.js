@@ -91,6 +91,19 @@ export const DEFAULTS = {
   //             tier's total inventory and backorders
   //   "split" = classic mode only: half the games share, half do not
   sharing: "off",
+
+  // Computer players (used for empty teams, or when you hand a team to
+  // the computer). "steady" = one predictable rule for every team.
+  // "mixed" = each team gets one of: steady, conservative, reacts
+  // strongly, forecast-based, chosen by botSeed. The same seed always
+  // gives the same assignment, so test runs are repeatable.
+  botStyle: "steady",
+  botSeed: 1,
+
+  // Seat students who join after the game starts automatically (on the
+  // smallest team, preferring computer-played teams). Turn off to seat
+  // late arrivals yourself from the Teams tab.
+  autoPlaceLate: true,
 };
 
 export const TIERS = ["retailer", "wholesaler", "distributor", "brewery"];
